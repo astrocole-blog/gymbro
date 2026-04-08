@@ -1770,7 +1770,35 @@
       return `backup-gym-${y}-${m}-${d}_${h}-${min}.json`;
     }
 
-    function exportData() {
+    async function exportData() {
+      // 1. Verificar si el navegador soporta File System Access API para elegir carpeta
+      if ('showSaveFilePicker' in window) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: buildBackupFileName(),
+            types: [{
+              description: 'JSON Backup File',
+              accept: { 'application/json': ['.json'] },
+            }],
+          });
+          const writable = await handle.createWritable();
+          await writable.write(JSON.stringify(state, null, 2));
+          await writable.close();
+          alert('Copia guardada con éxito.');
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            console.error(err);
+            // Fallback al método tradicional si hay error
+            fallbackExport();
+          }
+        }
+      } else {
+        // Fallback para navegadores antiguos/móviles sin soporte total de la API
+        fallbackExport();
+      }
+    }
+
+    function fallbackExport() {
       const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
