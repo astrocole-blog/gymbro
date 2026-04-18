@@ -846,6 +846,7 @@
       });
       Object.values(state.routines).forEach(normalizeRoutine);
       if (!state.routines[state.activeRoutineId]) state.activeRoutineId = Object.keys(state.routines)[0];
+      // Forzar actualización de sugerencias al cargar
       updateAllRoutineSuggestions();
     }
 
@@ -902,7 +903,6 @@
       return state.routines[state.activeRoutineId];
     }
 
-
     function clearRoutinePending(routine) {
       routine.pendingByDay = {};
       routine.dayNames.forEach(day => {
@@ -923,27 +923,47 @@
       render();
     }
 
+    // CORREGIDA: Función principal que determina qué día toca hoy
     function updateRoutineSuggestion(routine) {
       const today = todayKey();
+      const todayWeekday = todayWeekDaySpanish();
+      
       if (routine.type === 'weekly') {
-        const weekday = todayWeekDaySpanish();
-        if (weekday === 'Lunes' && routine.pendingResetDate !== today) {
+        // Para rutina semanal: siempre sugerir el día de la semana actual
+        // Solo reiniciar pendientes los lunes
+        if (todayWeekday === 'Lunes' && routine.pendingResetDate !== today) {
           clearRoutinePending(routine);
           routine.pendingResetDate = today;
         }
-        routine.suggestedDay = routine.dayNames.includes(weekday) ? weekday : routine.dayNames[0];
+        
+        // Sugerir el día de la semana que corresponde
+        if (routine.dayNames.includes(todayWeekday)) {
+          routine.suggestedDay = todayWeekday;
+        } else {
+          // Si por alguna razón no está en la lista, usar el primer día
+          routine.suggestedDay = routine.dayNames[0];
+        }
         routine.suggestionDate = today;
         return;
       }
-
+      
+      // Para rutina personalizada (por días)
+      // Si ya se sugirió hoy, no hacer nada
       if (routine.suggestionDate === today && routine.dayNames.includes(routine.suggestedDay)) {
         return;
       }
-
+      
+      // Determinar el siguiente día basado en el último completado
       let nextIndex = 0;
       if (routine.lastCompletedDayIndex >= 0) {
+        // Si completó algún día, ir al siguiente (ciclo)
         nextIndex = (routine.lastCompletedDayIndex + 1) % routine.dayNames.length;
+      } else {
+        // Si nunca completó nada, empezar desde el día 1 (índice 0)
+        // Pero si hay registro de completado de hoy? No debería pasar
+        nextIndex = 0;
       }
+      
       routine.suggestedDay = routine.dayNames[nextIndex];
       routine.suggestionDate = today;
     }
@@ -956,6 +976,7 @@
       state.currentScreen = screenId;
       const routine = getActiveRoutine();
       updateRoutineSuggestion(routine);
+      // Cuando se abre la pantalla de entrenar, mostrar el día sugerido
       if (screenId === 'train') {
         routine.visibleDay = routine.suggestedDay;
       }
@@ -1001,14 +1022,17 @@
       document.getElementById('homeSubtitle').textContent = `Rutina activa: ${routine.name}`;
       document.getElementById('activeRoutineTypePill').textContent = routine.type === 'weekly' ? 'Rutina semanal' : 'Rutina por días';
       document.getElementById('activeRoutineTitle').textContent = routine.name;
+      
+      const todayDate = new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'short' });
       document.getElementById('todaySuggestionText').textContent = routine.type === 'weekly'
-        ? `Hoy se abre directamente en ${day}.`
-        : `Hoy se sugiere ${day} según el último día completado.`;
+        ? `Hoy (${todayDate}) toca ${day}.`
+        : `Día sugerido: ${day} según tu progreso.`;
+      
       document.getElementById('homeStatDays').textContent = routine.dayNames.length;
       document.getElementById('homeStatExercises').textContent = countUniqueExercisesInRoutine(routine);
       document.getElementById('homeStatToday').textContent = todayList.length;
 
-      const completedToday = routine.completionLog.some(x => x.date === todayKey());
+      const completedToday = routine.completionLog.some(x => x.date === todayKey() && x.dayName === day);
       document.getElementById('homeSuggestedCard').innerHTML = `
         <div class="day-overview-item">
           <div class="row-between">
@@ -1056,20 +1080,15 @@
       document.getElementById('trainModePill').textContent = routine.type === 'weekly' ? 'Semanal' : 'Por días';
       document.getElementById('trainDayTitle').textContent = visibleDay;
       
-      document.getElementById('trainDayHint').textContent = isSuggested
-        ? 'Estás viendo el día sugerido de hoy.'
-        : `Estás viendo ${visibleDay} manualmente. Hoy toca ${suggested}.`;
+      document.getElementById('trainDayHint').innerHTML = isSuggested
+        ? `✅ <strong>Día correcto</strong> - Hoy toca ${suggested}`
+        : `⚠️ Estás viendo ${visibleDay} manualmente. <strong>Hoy toca ${suggested}</strong>.`;
 
       document.getElementById('hoyTocaBtn').style.display = isSuggested ? 'none' : 'block';
 
       const btnAction = document.getElementById('btnCompleteAction');
-      if (routine.type === 'weekly' && !isSuggested) {
-        btnAction.textContent = "Hacer este";
-        btnAction.onclick = () => reconfigureWeek(visibleDay);
-      } else {
-        btnAction.textContent = "Marcar hecho";
-        btnAction.onclick = () => markVisibleDayCompleted();
-      }
+      btnAction.textContent = "Marcar hecho";
+      btnAction.onclick = () => markVisibleDayCompleted();
 
       const strip = document.getElementById('trainDayStrip');
       strip.innerHTML = '';
@@ -1188,7 +1207,6 @@
     }
 
     function playBeepAndVibrate() {
-      // 1. Sonido
       try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const oscillator1 = audioCtx.createOscillator();
@@ -1205,7 +1223,6 @@
         oscillator2.type = 'square';
         oscillator2.frequency.setValueAtTime(885, audioCtx.currentTime);
         
-        // El volumen va de 0.0 a 1.0. Mapeamos 0-100 a ese rango.
         const vol = (state.restVolume !== undefined ? state.restVolume : 50) / 100;
         gainNode.gain.setValueAtTime(vol, audioCtx.currentTime);
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.6);
@@ -1216,9 +1233,7 @@
         oscillator2.stop(audioCtx.currentTime + 0.6);
       } catch(e) { console.log("Audio no soportado"); }
 
-      // 2. Vibración
       if ("vibrate" in navigator) {
-        // Vibrar en patrón: 300ms vibra, 100ms pausa, 300ms vibra
         navigator.vibrate([300, 100, 300]);
       }
     }
@@ -1633,6 +1648,8 @@
         routine.suggestedDay = routine.dayNames[nextIndex];
         routine.suggestionDate = today;
       } else {
+        // Para rutina semanal, no cambiamos la sugerencia al marcar hecho
+        // La sugerencia siempre es el día de la semana actual
         updateRoutineSuggestion(routine);
       }
 
@@ -1838,14 +1855,14 @@
     handleRoutineTypeChange();
     toggleSeriesTypeFields();
     render();
-    // Registro del Service Worker para notificaciones en segundo plano
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js')
-      .then(reg => console.log('Service Worker de GymBro listo', reg))
-      .catch(err => console.error('Error al registrar SW', err));
-  });
-}
+    
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+          .then(reg => console.log('Service Worker de GymBro listo', reg))
+          .catch(err => console.error('Error al registrar SW', err));
+      });
+    }
   </script>
 </body>
 </html>
